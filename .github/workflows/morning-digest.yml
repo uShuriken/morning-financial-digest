@@ -29,5 +29,7 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          FORCE_SEND: true
+          SEND_WINDOW_HOUR: 9
+          SEND_WINDOW_MINUTE: 40
+          SEND_WINDOW_LENGTH_MINUTES: 10
         run: python digest.py
