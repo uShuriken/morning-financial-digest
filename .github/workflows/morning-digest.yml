@@ -2,8 +2,8 @@ name: Morning Financial Digest
 
 on:
   schedule:
-    - cron: "5 18 * * *"
-    - cron: "5 19 * * *"
+    - cron: "17 18 * * *"
+    - cron: "17 19 * * *"
   workflow_dispatch:
 
 jobs:

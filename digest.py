@@ -67,7 +67,7 @@ def within_send_window() -> bool:
         return True
 
     now_local = datetime.now(AUCKLAND_TZ)
-    return now_local.hour == 7 and now_local.minute <= 20
+    return now_local.hour == 7 and now_local.minute <= 40
 
 
 def strip_html(raw_text: str) -> str:
@@ -282,6 +282,9 @@ def send_email(subject: str, body: str) -> None:
 
 
 def main() -> None:
+    now_local = datetime.now(AUCKLAND_TZ)
+    print(f"Current Auckland time: {now_local.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
     if not within_send_window():
         print("Outside the 7:00 AM Auckland send window; skipping.")
         return
