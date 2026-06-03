@@ -2,8 +2,8 @@ name: Morning Financial Digest
 
 on:
   schedule:
-    - cron: "17 18 * * *"
-    - cron: "17 19 * * *"
+    - cron: "40 21 * * *"
+    - cron: "45 21 * * *"
   workflow_dispatch:
 
 jobs:
@@ -29,5 +29,5 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          FORCE_SEND: ${{ vars.FORCE_SEND }}
+          FORCE_SEND: true
         run: python digest.py
