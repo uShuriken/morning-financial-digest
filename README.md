@@ -4,6 +4,7 @@ This project sends a short daily business and markets email without needing Code
 
 It uses:
 - RSS feeds for headline collection
+- source-specific business and tech feeds, including Reuters, CNBC, New York Times, RNZ, interest.co.nz, and The Verge
 - `yfinance` for a quick market snapshot
 - Gmail SMTP to send the email
 - GitHub Actions as the free cloud scheduler
@@ -16,8 +17,10 @@ The summary prompt now tells the model to write for a smart 18-year-old:
 - less finance jargon
 - short bullets
 - plain-English bottom line
+- source labels and short article summaries in each section
 
 If OpenAI is unavailable, the fallback email is also written more simply.
+It now also keeps the source name on each bullet and uses each RSS item's summary when available.
 
 ## Free Cloud Setup
 
@@ -90,3 +93,4 @@ python digest.py
 - GitHub Actions cron timing can drift by a few minutes.
 - Auckland daylight saving is handled by running the workflow twice in UTC and checking local time inside the script.
 - If you want stronger source quality later, we can swap RSS feeds for paid APIs.
+- RSS feeds only expose the headline, link, and whatever short summary the publisher includes. This keeps the setup free, but it will not read full paywalled articles.

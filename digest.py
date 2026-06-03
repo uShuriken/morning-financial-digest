@@ -1,12 +1,13 @@
+import html
 import os
+import re
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.utils import formataddr
+from typing import Any, TypedDict
 
-import feedparser
 import pytz
-import yfinance as yf
 
 try:
     from openai import OpenAI
@@ -16,23 +17,38 @@ except Exception:
 
 AUCKLAND_TZ = pytz.timezone("Pacific/Auckland")
 
-FEEDS = {
+
+class FeedConfig(TypedDict):
+    source: str
+    url: str
+
+
+class Article(TypedDict):
+    source: str
+    title: str
+    summary: str
+    link: str
+
+
+FEEDS: dict[str, list[FeedConfig]] = {
     "Global markets": [
-        "https://feeds.reuters.com/reuters/businessNews",
-        "https://feeds.reuters.com/news/wealth",
-        "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+        {"source": "Reuters Business", "url": "https://feeds.reuters.com/reuters/businessNews"},
+        {"source": "CNBC Markets", "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html"},
+        {"source": "NYT Business", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"},
     ],
     "U.S. markets": [
-        "https://feeds.reuters.com/reuters/domesticNews",
-        "https://www.cnbc.com/id/15839135/device/rss/rss.html",
+        {"source": "Reuters U.S.", "url": "https://feeds.reuters.com/reuters/domesticNews"},
+        {"source": "CNBC Economy", "url": "https://www.cnbc.com/id/20910258/device/rss/rss.html"},
+        {"source": "NYT DealBook", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Dealbook.xml"},
     ],
     "New Zealand": [
-        "https://www.rnz.co.nz/rss/business.xml",
-        "https://www.interest.co.nz/rss.xml",
+        {"source": "RNZ Business", "url": "https://www.rnz.co.nz/rss/business.xml"},
+        {"source": "interest.co.nz", "url": "https://www.interest.co.nz/rss.xml"},
     ],
     "Technology": [
-        "https://feeds.reuters.com/reuters/technologyNews",
-        "https://www.theverge.com/rss/index.xml",
+        {"source": "Reuters Tech", "url": "https://feeds.reuters.com/reuters/technologyNews"},
+        {"source": "NYT Technology", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"},
+        {"source": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
     ],
 }
 
@@ -54,28 +70,89 @@ def within_send_window() -> bool:
     return now_local.hour == 7 and now_local.minute <= 20
 
 
-def fetch_headlines(limit_per_section: int = 5) -> dict[str, list[str]]:
-    headlines = {}
-    for section, urls in FEEDS.items():
-        items = []
-        seen = set()
-        for url in urls:
-            feed = feedparser.parse(url)
+def strip_html(raw_text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", raw_text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def shorten_summary(raw_text: str, max_chars: int = 160) -> str:
+    cleaned = strip_html(raw_text)
+    if not cleaned:
+        return ""
+
+    first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()
+    summary = first_sentence or cleaned
+
+    if len(summary) <= max_chars:
+        return summary
+
+    shortened = summary[: max_chars - 3].rsplit(" ", 1)[0].strip()
+    return f"{shortened}..." if shortened else f"{summary[: max_chars - 3]}..."
+
+
+def entry_summary(entry: dict[str, Any]) -> str:
+    candidates = [
+        entry.get("summary", ""),
+        entry.get("description", ""),
+    ]
+
+    for candidate in candidates:
+        summary = shorten_summary(candidate)
+        if summary:
+            return summary
+    return ""
+
+
+def fetch_articles(limit_per_source: int = 2, limit_per_section: int = 6) -> dict[str, list[Article]]:
+    import feedparser
+
+    articles_by_section: dict[str, list[Article]] = {}
+
+    for section, feeds in FEEDS.items():
+        section_articles: list[Article] = []
+        seen_titles = set()
+
+        for feed_config in feeds:
+            feed = feedparser.parse(feed_config["url"])
+            source_count = 0
+
             for entry in feed.entries:
-                title = entry.get("title", "").strip()
-                if not title or title in seen:
+                title = strip_html(entry.get("title", ""))
+                if not title:
                     continue
-                seen.add(title)
-                items.append(title)
-                if len(items) >= limit_per_section:
+
+                normalized_title = title.casefold()
+                if normalized_title in seen_titles:
+                    continue
+
+                summary = entry_summary(entry)
+                section_articles.append(
+                    {
+                        "source": feed_config["source"],
+                        "title": title,
+                        "summary": summary,
+                        "link": entry.get("link", "").strip(),
+                    }
+                )
+                seen_titles.add(normalized_title)
+                source_count += 1
+
+                if source_count >= limit_per_source or len(section_articles) >= limit_per_section:
                     break
-            if len(items) >= limit_per_section:
+
+            if len(section_articles) >= limit_per_section:
                 break
-        headlines[section] = items
-    return headlines
+
+        articles_by_section[section] = section_articles
+
+    return articles_by_section
 
 
 def fetch_market_snapshot() -> list[str]:
+    import yfinance as yf
+
     lines = []
     for label, ticker in TICKERS.items():
         try:
@@ -91,7 +168,13 @@ def fetch_market_snapshot() -> list[str]:
     return lines
 
 
-def fallback_email_body(headlines: dict[str, list[str]], market_lines: list[str]) -> tuple[str, str]:
+def format_article_line(article: Article) -> str:
+    if article["summary"]:
+        return f"- {article['source']}: {article['title']}. {article['summary']}"
+    return f"- {article['source']}: {article['title']}"
+
+
+def fallback_email_body(articles: dict[str, list[Article]], market_lines: list[str]) -> tuple[str, str]:
     local_now = datetime.now(AUCKLAND_TZ)
     subject = f"Morning Financial Digest - {local_now.strftime('%a %d %b %Y')}"
 
@@ -103,12 +186,12 @@ def fallback_email_body(headlines: dict[str, list[str]], market_lines: list[str]
     ]
     body_lines.extend(line for item in market_lines for line in (item, ""))
 
-    for section, items in headlines.items():
+    for section, items in articles.items():
         body_lines.append(section.upper())
         body_lines.append("")
         if items:
             for item in items:
-                body_lines.append(f"- {item}")
+                body_lines.append(format_article_line(item))
                 body_lines.append("")
         else:
             body_lines.append("- No major items came through from the news feeds.")
@@ -126,13 +209,13 @@ def fallback_email_body(headlines: dict[str, list[str]], market_lines: list[str]
             "",
             "BOTTOM LINE",
             "",
-            "- Markets usually move most when rates, oil, and big tech all shift at the same time.",
+            "- This version pulls named sources directly, so you can see who is driving each story each morning.",
         ]
     )
     return subject, "\n".join(body_lines)
 
 
-def llm_email_body(headlines: dict[str, list[str]], market_lines: list[str]) -> tuple[str, str] | None:
+def llm_email_body(articles: dict[str, list[Article]], market_lines: list[str]) -> tuple[str, str] | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or OpenAI is None:
         return None
@@ -149,6 +232,8 @@ Requirements:
 - Write for a smart 18-year-old.
 - Use simple, everyday language.
 - Avoid jargon. If you need a finance term, explain it in plain English in the same bullet.
+- Start each story bullet with the source name.
+- Use the article summaries provided instead of inventing extra detail.
 - Keep each bullet concise and easy to scan on a phone.
 - Focus on market-moving items, central banks, earnings, corporate actions, commodities, currencies, and major risks.
 - Add a one-sentence bottom line in plain English.
@@ -159,8 +244,8 @@ Date in Auckland: {local_now.strftime("%Y-%m-%d %H:%M %Z")}
 Market snapshot:
 {chr(10).join(market_lines)}
 
-Headlines by section:
-{headlines}
+Articles by section:
+{articles}
 """.strip()
 
     response = client.responses.create(
@@ -201,11 +286,11 @@ def main() -> None:
         print("Outside the 7:00 AM Auckland send window; skipping.")
         return
 
-    headlines = fetch_headlines()
+    articles = fetch_articles()
     market_lines = fetch_market_snapshot()
-    email = llm_email_body(headlines, market_lines)
+    email = llm_email_body(articles, market_lines)
     if email is None:
-        email = fallback_email_body(headlines, market_lines)
+        email = fallback_email_body(articles, market_lines)
     subject, body = email
     send_email(subject, body)
     print("Digest sent.")
